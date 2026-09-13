@@ -2,6 +2,8 @@
 
 > Transforming complex legal legalese into plain, actionable transparency using Google Gemini.
 
+🚀 **Live Demo:** [https://lexiclear-ai.streamlit.app](https://lexiclear-ai.streamlit.app)
+
 ---
 
 ## 📌 Problem Statement
