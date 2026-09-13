@@ -36,5 +36,5 @@ Legal documents, NDAs, employment contracts, and service agreements are intentio
 ### Installation
 1. Clone the repository:
    ```bash
-   git clone [https://github.com/your-username/LexiClear.git](https://github.com/your-username/LexiClear.git)
-   cd LexiClear
+  git clone https://github.com/mufasa-army/lexiclear-ai.git
+  cd lexiclear-ai
