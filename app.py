@@ -1,4 +1,3 @@
-import os
 import json
 import time
 from typing import Optional, Dict, Any
@@ -284,5 +283,3 @@ if uploaded_file:
 
                         st.markdown(answer)
                         st.session_state.chat_history.append({"role": "assistant", "content": answer})
-
-                        
