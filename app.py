@@ -1,3 +1,4 @@
+import os
 import json
 import time
 from typing import Optional, Dict, Any
@@ -5,6 +6,9 @@ import streamlit as st
 from pypdf import PdfReader
 from google import genai
 from google.genai import types
+
+# Security: Maximum allowed document size (10 MB limit)
+MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 
 # Page Configuration
 st.set_page_config(
@@ -14,7 +18,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Styling & High-Contrast Visual Standards
+# Custom Styling & High-Contrast Standards
 st.markdown("""
     <style>
     .metric-card {
@@ -37,6 +41,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+
+class LegalCopilotError(Exception):
+    """Custom domain exception for pipeline failures."""
+    pass
+
+
 # Resilient API Call with Multi-Model Fallback
 def generate_with_fallback(client: genai.Client, contents: Any, config: Optional[types.GenerateContentConfig] = None) -> Any:
     """
@@ -44,10 +54,10 @@ def generate_with_fallback(client: genai.Client, contents: Any, config: Optional
     with automated retry logic to manage concurrency spikes and 503 limits.
     """
     candidate_models = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.5-flash"]
-    last_error = None
+    last_error: Optional[Exception] = None
 
     for model_name in candidate_models:
-        for attempt in range(2):
+        for _ in range(2):
             try:
                 if config:
                     return client.models.generate_content(
@@ -65,9 +75,10 @@ def generate_with_fallback(client: genai.Client, contents: Any, config: Optional
                 time.sleep(1)
                 continue
 
-    raise last_error
+    raise LegalCopilotError(f"Multi-model execution exhausted: {last_error}")
 
-# High-Performance Cached PDF Extractor
+
+# High-Performance Cached PDF Extractor with Strict Validation
 @st.cache_data(show_spinner=False)
 def extract_pdf_text(uploaded_file) -> Optional[str]:
     """
@@ -85,14 +96,17 @@ def extract_pdf_text(uploaded_file) -> Optional[str]:
         full_text = "\n".join(extracted_text).strip()
         return full_text if full_text else None
     except Exception as e:
-        st.error(f"Error parsing PDF content: {e}")
         return None
+
 
 # Structured Document Analysis Engine
 def analyze_legal_document(client: genai.Client, doc_text: str) -> Dict[str, Any]:
     """
     Analyzes legal text with strict JSON schema adherence and bounded temperature.
     """
+    if not doc_text or not doc_text.strip():
+        raise ValueError("Document text cannot be empty.")
+
     system_prompt = (
         "You are an expert legal assistant AI designed to simplify contracts and legal agreements for everyday users. "
         "Analyze the provided document and return a strictly valid JSON object conforming to the following schema:\n"
@@ -116,21 +130,29 @@ def analyze_legal_document(client: genai.Client, doc_text: str) -> Dict[str, Any
     )
     
     response = generate_with_fallback(client, contents=[doc_text], config=config)
-    return json.loads(response.text)
+    try:
+        return json.loads(response.text)
+    except json.JSONDecodeError as err:
+        raise LegalCopilotError(f"Model returned invalid JSON structure: {err}")
 
-# Sidebar Configuration
+
+# Sidebar Configuration & Secure Key Resolution
 with st.sidebar:
     st.title("⚖️ LexiClear")
     st.caption("AI-Powered Legal Document Auditor & Simplifier")
     st.divider()
     
-    api_key = st.text_input(
+    # Priority: Secrets / Env Var -> User Input (Zero Hardcoding)
+    env_key = os.environ.get("GEMINI_API_KEY", "")
+    api_key_input = st.text_input(
         label="Gemini API Key",
         type="password",
+        value=env_key,
         help="Enter your Google AI Studio API key (Required for secure document auditing)",
         placeholder="AIzaSy...",
         label_visibility="visible"
     )
+    api_key = api_key_input.strip() if api_key_input else env_key
     st.markdown("Get your key free at [Google AI Studio](https://aistudio.google.com/).")
     
     st.divider()
@@ -153,13 +175,13 @@ st.markdown(
 )
 
 if not api_key:
-    st.info("👈 Please enter your Gemini API Key in the sidebar to activate the analysis engine.")
+    st.info("👈 Please enter your Gemini API Key in the sidebar or configure GEMINI_API_KEY to activate.")
     st.stop()
 
-# Initialize Gemini Client
+# Initialize Gemini Client Securely
 client = genai.Client(api_key=api_key)
 
-# Accessible File Uploader
+# Accessible & Secure File Uploader
 uploaded_file = st.file_uploader(
     label="Upload Legal Document (PDF or TXT format)",
     type=["pdf", "txt"],
@@ -168,12 +190,17 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file:
+    # Security: File size validation cap
+    if uploaded_file.size > MAX_FILE_SIZE_BYTES:
+        st.error(f"File exceeds maximum allowed size of 10 MB ({uploaded_file.size / (1024*1024):.2f} MB).")
+        st.stop()
+
     if "doc_text" not in st.session_state or st.session_state.get("file_name") != uploaded_file.name:
         with st.spinner("Parsing and caching document content..."):
             if uploaded_file.type == "application/pdf":
                 doc_text = extract_pdf_text(uploaded_file)
             else:
-                doc_text = uploaded_file.read().decode("utf-8")
+                doc_text = uploaded_file.read().decode("utf-8", errors="replace")
             
             st.session_state.doc_text = doc_text
             st.session_state.file_name = uploaded_file.name
@@ -183,7 +210,7 @@ if uploaded_file:
     doc_text = st.session_state.doc_text
 
     if not doc_text:
-        st.error("Could not extract readable text from this document. Please ensure it is a text-based document.")
+        st.error("Could not extract readable text from this document. Please ensure it is a valid text-based file.")
         st.stop()
 
     col1, col2 = st.columns([3, 1])
